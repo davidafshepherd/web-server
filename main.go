@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -40,6 +41,11 @@ func handleConnection(conn net.Conn) error {
 	// Close the TCP connection when finished.
 	defer conn.Close()
 
+	// Set a deadline for receiving the HTTP request.
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return fmt.Errorf("set read deadline: %w", err)
+	}
+
 	// Create a buffered reader for the incoming HTTP request.
 	reader := bufio.NewReader(conn)
 
@@ -52,12 +58,27 @@ func handleConnection(conn net.Conn) error {
 	// Extract the request method, path to requested resource and HTTP version.
 	parts := strings.Fields(requestLine)
 	if len(parts) != 3 {
-		return fmt.Errorf("invalid HTTP request line: %q", requestLine)
+		return writeResponse(conn, "400 Bad Request", nil)
 	}
 
 	requestMethod := parts[0]
 	requestPath := parts[1]
 	version := parts[2]
+
+	// Validate the request method.
+	if requestMethod != "GET" {
+		return writeResponse(conn, "405 Method Not Allowed", nil)
+	}
+
+	// Validate the request path.
+	if !strings.HasPrefix(requestPath, "/") {
+		return writeResponse(conn, "400 Bad Request", nil)
+	}
+
+	// Validate the HTTP version.
+	if version != "HTTP/1.1" {
+		return writeResponse(conn, "505 HTTP Version Not Supported", nil)
+	}
 
 	fmt.Printf("Request Method: %s, Requested Resource: %s, HTTP Version: %s\n", requestMethod, requestPath, version)
 
@@ -78,14 +99,27 @@ func handleConnection(conn net.Conn) error {
 		return writeResponse(conn, "403 Forbidden", nil)
 	}
 
-	// Resolve the requested file inside the www directory.
-	filePath := filepath.Join("www", localPath)
+	// Open the document root to prevent access outside www.
+	root, err := os.OpenRoot("www")
+	if err != nil {
+		if writeErr := writeResponse(conn, "500 Internal Server Error", nil); writeErr != nil {
+			return writeErr
+		}
+		return fmt.Errorf("open document root: %w", err)
+	}
+	defer root.Close()
 
 	// Read the requested file.
-	content, err := os.ReadFile(filePath)
+	content, err := root.ReadFile(localPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return writeResponse(conn, "404 Not Found", nil)
+		}
+		if os.IsPermission(err) {
+			return writeResponse(conn, "403 Forbidden", nil)
+		}
+		if writeErr := writeResponse(conn, "500 Internal Server Error", nil); writeErr != nil {
+			return writeErr
 		}
 		return fmt.Errorf("read file: %w", err)
 	}
@@ -96,6 +130,11 @@ func handleConnection(conn net.Conn) error {
 
 // writeResponse sends an HTTP response with the given status and body.
 func writeResponse(conn net.Conn, status string, body []byte) error {
+	// Set a deadline for sending the HTTP response.
+	if err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return fmt.Errorf("set write deadline: %w", err)
+	}
+
 	// Construct the HTTP response.
 	response := fmt.Sprintf("HTTP/1.1 %s\r\n\r\n", status)
 
