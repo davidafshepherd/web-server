@@ -29,10 +29,12 @@ func main() {
 			continue
 		}
 
-		// Handle one TCP connection at a time.
-		if err := handleConnection(conn); err != nil {
-			log.Println("Error handling connection:", err)
-		}
+		// Handle each TCP connection concurrently.
+		go func() {
+			if err := handleConnection(conn); err != nil {
+				log.Println("Error handling connection:", err)
+			}
+		}()
 	}
 }
 

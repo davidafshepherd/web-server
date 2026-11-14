@@ -18,6 +18,11 @@ func TestHandleConnection(t *testing.T) {
 		wantErr        bool
 	}{
 		{
+			name:    "invalid request line",
+			request: "INVALID\r\n",
+			wantErr: true,
+		},
+		{
 			name:           "root path",
 			request:        "GET / HTTP/1.1\r\n\r\n",
 			expectedStatus: "HTTP/1.1 200 OK",
@@ -44,11 +49,6 @@ func TestHandleConnection(t *testing.T) {
 			request:        "GET /index.html?test=123 HTTP/1.1\r\n\r\n",
 			expectedStatus: "HTTP/1.1 200 OK",
 			expectedBody:   "My web server served this page!",
-		},
-		{
-			name:    "invalid request line",
-			request: "INVALID\r\n",
-			wantErr: true,
 		},
 	}
 
