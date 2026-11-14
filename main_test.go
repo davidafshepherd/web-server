@@ -15,12 +15,11 @@ func TestHandleConnection(t *testing.T) {
 		request        string
 		expectedStatus string
 		expectedBody   string
-		wantErr        bool
 	}{
 		{
-			name:    "invalid request line",
-			request: "INVALID\r\n",
-			wantErr: true,
+			name:           "invalid request line",
+			request:        "INVALID\r\n",
+			expectedStatus: "HTTP/1.1 400 Bad Request",
 		},
 		{
 			name:           "root path",
@@ -76,17 +75,8 @@ func TestHandleConnection(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			// Ensure the connection handler completed as expected.
-			err = <-done
-
-			if test.wantErr {
-				if err == nil {
-					t.Fatal("expected an error")
-				}
-				return
-			}
-
-			if err != nil {
+			// Ensure the connection handler completed successfully.
+			if err := <-done; err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
