@@ -2,10 +2,13 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -84,50 +87,135 @@ func handleConnection(conn net.Conn) error {
 
 	fmt.Printf("Request Method: %s, Requested Resource: %s, HTTP Version: %s\n", requestMethod, requestPath, version)
 
-	// Remove any query parameters from the path.
-	requestPath = strings.SplitN(requestPath, "?", 2)[0]
+	// Separate the path from the query if one is present.
+	requestPath, query, _ := strings.Cut(requestPath, "?")
 
 	// Serve 'index.html' for the root path '/'.
 	if requestPath == "/" {
 		requestPath = "/index.html"
 	}
 
+	// Check whether the path is for a CGI script.
+	isCGI := strings.HasPrefix(requestPath, "/cgi-bin/")
+
 	// Convert the path into a relative path.
 	relativePath := strings.TrimPrefix(requestPath, "/")
+	if isCGI {
+		relativePath = strings.TrimPrefix(relativePath, "cgi-bin/")
+	}
 
-	// Validate the path and convert it into a local filesystem path.
+	// Validate and localise the path.
 	localPath, err := filepath.Localize(relativePath)
 	if err != nil {
 		return writeResponse(conn, "403 Forbidden", nil)
 	}
 
-	// Open the document root to prevent access outside www.
-	root, err := os.OpenRoot("www")
+	// Execute the requested file if it is a CGI script.
+	if isCGI {
+		return handleCGI(conn, localPath, requestPath, query)
+	}
+
+	// Serve the requested file if it is a static file.
+	return handleStatic(conn, localPath)
+}
+
+// handleCGI executes a CGI script and sends its output to the client.
+func handleCGI(conn net.Conn, localPath, requestPath, query string) error {
+	// Open the document root to prevent access outside the cgi-bin directory.
+	root, err := os.OpenRoot("cgi-bin")
 	if err != nil {
-		if writeErr := writeResponse(conn, "500 Internal Server Error", nil); writeErr != nil {
-			return writeErr
-		}
-		return fmt.Errorf("open document root: %w", err)
+		return handleInternalError(conn, "500 Internal Server Error", fmt.Errorf("open document root: %w", err))
 	}
 	defer root.Close()
 
-	// Read the requested file.
-	content, err := root.ReadFile(localPath)
+	// Validate the CGI script.
+	if filepath.Ext(localPath) != ".pl" {
+		return writeResponse(conn, "403 Forbidden", nil)
+	}
+
+	// Read the CGI script.
+	script, err := root.ReadFile(localPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return writeResponse(conn, "404 Not Found", nil)
-		}
 		if os.IsPermission(err) {
 			return writeResponse(conn, "403 Forbidden", nil)
 		}
-		if writeErr := writeResponse(conn, "500 Internal Server Error", nil); writeErr != nil {
-			return writeErr
+		if os.IsNotExist(err) {
+			return writeResponse(conn, "404 Not Found", nil)
 		}
-		return fmt.Errorf("read file: %w", err)
+		return handleInternalError(conn, "500 Internal Server Error", fmt.Errorf("read script: %w", err))
 	}
 
-	// Send the requested file.
+	// Limit script execution to 30 seconds.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Execute the CGI script using Perl.
+	cmd := exec.CommandContext(ctx, "perl", "-")
+	cmd.Stdin = bytes.NewReader(script)
+	cmd.Env = append(os.Environ(),
+		"GATEWAY_INTERFACE=CGI/1.1",
+		"QUERY_STRING="+query,
+		"REQUEST_METHOD=GET",
+		"SCRIPT_NAME="+requestPath,
+		"SERVER_NAME=localhost",
+		"SERVER_PORT=80",
+		"SERVER_PROTOCOL=HTTP/1.1",
+	)
+
+	// Store the CGI script's output.
+	output, err := cmd.Output()
+	if err != nil {
+		status := "500 Internal Server Error"
+		if ctx.Err() == context.DeadlineExceeded {
+			status = "504 Gateway Timeout"
+		}
+		return handleInternalError(conn, status, fmt.Errorf("execute script: %w", err))
+	}
+
+	// Separate the CGI response header from the CGI response body.
+	_, body, found := bytes.Cut(output, []byte("\r\n\r\n"))
+	if !found {
+		_, body, found = bytes.Cut(output, []byte("\n\n"))
+	}
+	if !found {
+		return handleInternalError(conn, "500 Internal Server Error", fmt.Errorf("invalid CGI response: missing separator"))
+	}
+
+	// Send the CGI script's output.
+	return writeResponse(conn, "200 OK", body)
+}
+
+// handleStatic reads a static file and sends it to the client.
+func handleStatic(conn net.Conn, localPath string) error {
+	// Open the document root to prevent access outside the www directory.
+	root, err := os.OpenRoot("www")
+	if err != nil {
+		return handleInternalError(conn, "500 Internal Server Error", fmt.Errorf("open document root: %w", err))
+	}
+	defer root.Close()
+
+	// Read the static file.
+	content, err := root.ReadFile(localPath)
+	if err != nil {
+		if os.IsPermission(err) {
+			return writeResponse(conn, "403 Forbidden", nil)
+		}
+		if os.IsNotExist(err) {
+			return writeResponse(conn, "404 Not Found", nil)
+		}
+		return handleInternalError(conn, "500 Internal Server Error", fmt.Errorf("read file: %w", err))
+	}
+
+	// Send the static file.
 	return writeResponse(conn, "200 OK", content)
+}
+
+// handleInternalError sends an HTTP error response and returns the original error.
+func handleInternalError(conn net.Conn, status string, err error) error {
+	if writeErr := writeResponse(conn, status, nil); writeErr != nil {
+		return writeErr
+	}
+	return err
 }
 
 // writeResponse sends an HTTP response with the given status and body.

@@ -22,19 +22,29 @@ func TestHandleConnection(t *testing.T) {
 			expectedStatus: "HTTP/1.1 400 Bad Request",
 		},
 		{
+			name:           "unsupported HTTP method",
+			request:        "POST /index.html HTTP/1.1\r\n\r\n",
+			expectedStatus: "HTTP/1.1 405 Method Not Allowed",
+		},
+		{
+			name:           "unsupported HTTP version",
+			request:        "GET /index.html HTTP/1.0\r\n\r\n",
+			expectedStatus: "HTTP/1.1 505 HTTP Version Not Supported",
+		},
+		{
 			name:           "root path",
 			request:        "GET / HTTP/1.1\r\n\r\n",
 			expectedStatus: "HTTP/1.1 200 OK",
 			expectedBody:   "My web server served this page!",
 		},
 		{
-			name:           "existing file",
+			name:           "existing static file",
 			request:        "GET /index.html HTTP/1.1\r\n\r\n",
 			expectedStatus: "HTTP/1.1 200 OK",
 			expectedBody:   "My web server served this page!",
 		},
 		{
-			name:           "missing file",
+			name:           "missing static file",
 			request:        "GET /missing.html HTTP/1.1\r\n\r\n",
 			expectedStatus: "HTTP/1.1 404 Not Found",
 		},
@@ -48,6 +58,28 @@ func TestHandleConnection(t *testing.T) {
 			request:        "GET /index.html?test=123 HTTP/1.1\r\n\r\n",
 			expectedStatus: "HTTP/1.1 200 OK",
 			expectedBody:   "My web server served this page!",
+		},
+		{
+			name:           "existing CGI script",
+			request:        "GET /cgi-bin/hello.pl HTTP/1.1\r\n\r\n",
+			expectedStatus: "HTTP/1.1 200 OK",
+			expectedBody:   "Hello from Perl CGI!",
+		},
+		{
+			name:           "existing CGI script with query string",
+			request:        "GET /cgi-bin/hello.pl?name=David HTTP/1.1\r\n\r\n",
+			expectedStatus: "HTTP/1.1 200 OK",
+			expectedBody:   "name=David",
+		},
+		{
+			name:           "missing CGI script",
+			request:        "GET /cgi-bin/missing.pl HTTP/1.1\r\n\r\n",
+			expectedStatus: "HTTP/1.1 404 Not Found",
+		},
+		{
+			name:           "unsupported CGI script extension",
+			request:        "GET /cgi-bin/hello.py HTTP/1.1\r\n\r\n",
+			expectedStatus: "HTTP/1.1 403 Forbidden",
 		},
 	}
 
